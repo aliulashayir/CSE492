@@ -9,7 +9,6 @@ from backtrack import solve, is_valid_board
 import PySimpleGUI as sg
 import os
 import cv2
-
 from PIL import Image
 
 # Global variable
@@ -24,7 +23,6 @@ class SudokuGUI:
         self.entries = {}
         self.window = sg.Window("Sudoku Solver", self.create_layout(), finalize=True)
 
-
     def create_layout(self):
         layout = []
         for i in range(9):
@@ -35,7 +33,8 @@ class SudokuGUI:
                 row.append(entry)
                 self.entries[key] = entry
             layout.append(row)
-        layout.append([sg.Button('Done', font=('Helvetica', 16), key='Done', bind_return_key=True)])
+        layout.append([sg.Button('Solve', font=('Helvetica', 16), key='Solve', bind_return_key=True),
+                       sg.Button('Next', font=('Helvetica', 16), key='Next', visible=False)])  # Add the 'Next' button
         return layout
     
     def display_board(self, board):  # Added method to display the board
@@ -81,12 +80,12 @@ def browse_files():
 
 
 def display_image(image_file):
-    image = Image.open(image_file)
-    image.show()
+    #image = Image.open(image_file)
+    #image.show()
+    image_file = ""
 
 
-def display_solution(image_file, puzzleImage, cellLocs, board):
-    image = Image.open(image_file)
+def display_solution(file_path, puzzleImage, cellLocs, board):
     for (cellRow, boardRow) in zip(cellLocs, board):
         # loop over individual cell in the row
         for (box, digit) in zip(cellRow, boardRow):
@@ -98,17 +97,29 @@ def display_solution(image_file, puzzleImage, cellLocs, board):
             textY = int((endY - startY) * -0.2)
             textX += startX
             textY += endY
+            # determine the color based on the column index
+            if (box[0] // (puzzleImage.shape[1] // 9)) % 2 == 0:
+                color = (0, 0, 255)  # Red color for even columns
+            else:
+                color = (0, 255, 255)  # Yellow color for odd columns
             # draw the result digit on the Sudoku puzzle image
             cv2.putText(puzzleImage, str(digit), (textX, textY),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 255, 255), 2)
-    # show the output image
-    puzzleImage.show()
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.9, color, 2)
 
+
+
+def convert_cv2_img_to_bytes(image):
+    """Convert cv2 image to bytes for PySimpleGUI."""
+    ret, png = cv2.imencode('.png', image)
+    return png.tobytes()
+
+def display_image_window(img_data, window_title='Image'):
+    """Create a window to display an image."""
+    layout = [[sg.Image(data=img_data, key='image')]]
+    return sg.Window(window_title, layout, finalize=True, resizable=True)
 
 def start_processing(selected_model):
-    
     if file_path:
-        
         board, puzzleImage, cellLocs = process_image(file_path, selected_model, model)
 
         # Create GUI
@@ -117,31 +128,42 @@ def start_processing(selected_model):
         # Update the GUI with the OCR'd board
         gui.update_grid(board.tolist())
 
-        display_image(file_path)
-        # This will block until the user closes the window or presses the 'Done' button
-        gui.start()
+        # Display the initial puzzle image in a separate window
+        puzzle_image_window = display_image_window(convert_cv2_img_to_bytes(puzzleImage), 'Original Puzzle')
 
+        while True:
+            event, values = gui.window.read(timeout=100)  # Add a timeout so other windows can be read
+            if event == sg.WINDOW_CLOSED:
+                puzzle_image_window.close()
+                break
+            elif event == 'Solve':
+                # Get the user-validated sudoku
+                validated_sudoku = np.array(gui.get_grid(), dtype='int')
 
-       
-        # Get the user-validated sudoku
-        validated_sudoku = np.array(gui.get_grid(), dtype='int')
+                # Solve the sudoku
+                print("[INFO] Solving Sudoku puzzle...")
+                if is_valid_board(validated_sudoku):
+                    solve(validated_sudoku)
+                else:
+                    print("[ERROR] The provided Sudoku board is invalid.")
+                    continue
 
-        # Solve the sudoku
-        print("[INFO] Solving Sudoku puzzle...")
-        if is_valid_board(validated_sudoku):
-            solve(validated_sudoku)
-        else:
-            print("[ERROR] The provided Sudoku board is invalid.")
-            quit()
+                # Update the GUI with the solved sudoku
+                gui.update_grid(validated_sudoku.tolist())
 
-        # Update the GUI with the solved sudoku
-        gui.update_grid(validated_sudoku.tolist())
+                # Display the solution on the puzzle image
+                display_solution(file_path, puzzleImage, cellLocs, validated_sudoku)
 
-        # This will block until the user closes the window or presses the 'Done' button
-        gui.start()
+                # Update the puzzle image window with the solution image
+                puzzle_image_window['image'].update(data=convert_cv2_img_to_bytes(puzzleImage))
 
-        # Display the solution on the puzzle image
-        display_solution(file_path, puzzleImage, cellLocs, validated_sudoku)
+                # Make the 'Next' button visible
+                gui.window['Next'].update(visible=True)
+            elif event == 'Next':
+                gui.window.close()
+                puzzle_image_window.close()
+                break
+
 
 
 def predict_with_pytesseract(digit):
@@ -193,22 +215,29 @@ def process_image(image_file, selected_model, model):
 
 
 # GUI
-layout = [
-    [sg.Button("Browse files", key='Browse')],
-    [sg.Button("Start Processing", key='Start')],
-    [sg.Radio("PyTesseract", "model", default=True, key='PyTesseract'), sg.Radio("Model", "model", key='Model')]
-]
 
-window = sg.Window("Sudoku Solver", layout)
+def start_program():
+    window = None
+    while True:
+        if window is None:
+            # Create the main window when the program starts or when it's closed
+            layout = [
+                [sg.Button("Browse files", key='Browse')],
+                [sg.Button("Start Processing", key='Start')],
+                [sg.Radio("PyTesseract", "model", default=True, key='PyTesseract'), sg.Radio("Model", "model", key='Model')]
+            ]
+            window = sg.Window("Sudoku Solver", layout)
 
-while True:
-    event, values = window.read()
-    if event == sg.WINDOW_CLOSED:
-        break
-    elif event == 'Browse':
-        browse_files()
-    elif event == 'Start':
-        selected_model = 'pytesseract' if values['PyTesseract'] else 'model'
-        start_processing(selected_model)
+        event, values = window.read()
+        if event == sg.WINDOW_CLOSED:
+            break
+        elif event == 'Browse':
+            browse_files()
+        elif event == 'Start':
+            selected_model = 'pytesseract' if values['PyTesseract'] else 'model'
+            start_processing(selected_model)
+            window = None  # Mark the main window to be restarted
 
-window.close()
+
+if __name__ == "__main__":
+    start_program()
